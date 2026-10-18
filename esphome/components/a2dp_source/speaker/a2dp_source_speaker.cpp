@@ -381,6 +381,7 @@ std::string A2DPSourceSpeaker::discovery_results(uint8_t page) const {
       result.append(snapshot[i].name, strnlen(snapshot[i].name, 24));
     }
     result += " (" + std::to_string(snapshot[i].rssi) + " dBm)";
+    result += this->is_bonded_(snapshot[i].address) ? " [paired]" : " [not paired]";
   }
   return result;
 }
