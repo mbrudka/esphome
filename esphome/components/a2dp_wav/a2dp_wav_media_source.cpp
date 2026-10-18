@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstring>
 
 namespace esphome::a2dp_wav {
@@ -25,7 +26,7 @@ static uint32_t le32(const uint8_t *p) {
 
 void A2DPWavMediaSource::setup() { this->disable_loop(); }
 void A2DPWavMediaSource::dump_config() {
-  ESP_LOGCONFIG(TAG, "A2DP HTTP PCM WAV source (44.1 kHz stereo or 22.05 kHz mono, 16-bit)");
+  ESP_LOGCONFIG(TAG, "A2DP HTTP PCM WAV source (44.1 kHz stereo, 22.05 kHz stereo or mono, 16-bit)");
 }
 bool A2DPWavMediaSource::can_handle(const std::string &uri) const {
   return uri.starts_with("http://") || uri.starts_with("https://");
@@ -75,8 +76,8 @@ void A2DPWavMediaSource::loop() {
   const int result = this->result_.load();
   if (result == 0)
     return;
-  ESP_LOGI(TAG, "WAV result=%d input=%u output=%u max HTTP read=%u us", result, this->input_bytes_.load(),
-           this->output_bytes_.load(), this->max_http_read_us_.load());
+  ESP_LOGI(TAG, "WAV result=%d input=%" PRIu32 " output=%" PRIu32 " max HTTP read=%" PRIu32 " us", result,
+           this->input_bytes_.load(), this->output_bytes_.load(), this->max_http_read_us_.load());
   if (result < 0)
     this->set_state_(media_source::MediaSourceState::ERROR);
   // The orchestrator finishes the A2DP speaker on IDLE, including after a read error.
@@ -153,6 +154,7 @@ void A2DPWavMediaSource::run_() {
     }
     bool format_ok = false;
     bool mono_22050 = false;
+    bool stereo_22050 = false;
     uint32_t data_size = 0;
     for (int chunk = 0; chunk < 32 && !this->stop_; chunk++) {
       uint8_t header[8];
@@ -166,9 +168,10 @@ void A2DPWavMediaSource::run_() {
         const bool stereo_44100 =
             le16(fmt) == 1 && le16(fmt + 2) == 2 && le32(fmt + 4) == 44100 && le16(fmt + 14) == 16;
         mono_22050 = le16(fmt) == 1 && le16(fmt + 2) == 1 && le32(fmt + 4) == 22050 && le16(fmt + 14) == 16;
-        format_ok = stereo_44100 || mono_22050;
+        stereo_22050 = le16(fmt) == 1 && le16(fmt + 2) == 2 && le32(fmt + 4) == 22050 && le16(fmt + 14) == 16;
+        format_ok = stereo_44100 || stereo_22050 || mono_22050;
         if (!format_ok) {
-          ESP_LOGE(TAG, "Only PCM16 stereo 44100 Hz or mono 22050 Hz WAV is supported");
+          ESP_LOGE(TAG, "Only PCM16 stereo 44100 Hz, stereo 22050 Hz or mono 22050 Hz WAV is supported");
           break;
         }
       } else if (memcmp(header, "data", 4) == 0 && format_ok) {
@@ -189,7 +192,8 @@ void A2DPWavMediaSource::run_() {
     uint64_t total = 0;
     uint32_t stalled_ms = 0;
     while (!this->stop_ && data_size) {
-      size_t want = std::min<size_t>(mono_22050 ? sizeof(pcm) / 4 : sizeof(pcm), data_size);
+      const size_t block_size = mono_22050 ? sizeof(pcm) / 4 : stereo_22050 ? sizeof(pcm) / 2 : sizeof(pcm);
+      size_t want = std::min<size_t>(block_size, data_size);
       const int64_t read_start = esp_timer_get_time();
       if (!read_exact(pcm, want)) {
         if (streaming_size && esp_http_client_is_complete_data_received(client)) {
@@ -223,6 +227,15 @@ void A2DPWavMediaSource::run_() {
           }
         }
         output_size = want * 4;
+      } else if (stereo_22050) {
+        // Duplicate each stereo frame in place while preserving left and right.
+        for (int i = static_cast<int>(want / 4) - 1; i >= 0; i--) {
+          const size_t input = 4 * i;
+          const size_t output = 8 * i;
+          std::memmove(pcm + output, pcm + input, 4);
+          std::memcpy(pcm + output + 4, pcm + output, 4);
+        }
+        output_size = want * 2;
       }
       size_t written = 0;
       while (written < output_size && !this->stop_) {
