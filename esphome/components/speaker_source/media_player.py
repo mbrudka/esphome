@@ -68,6 +68,10 @@ _validate_pipeline = media_player.validate_preferred_format(
     "speaker_source media_player", CONF_SPEAKER
 )
 
+CONF_ADVERTISE_FORMAT = "advertise_format"
+CONF_ADVERTISED_SAMPLE_RATE = "advertised_sample_rate"
+CONF_ADVERTISED_NUM_CHANNELS = "advertised_num_channels"
+
 
 PIPELINE_SCHEMA = cv.Schema(
     {
@@ -80,6 +84,9 @@ PIPELINE_SCHEMA = cv.Schema(
             cv.Length(min=1),
         ),
         cv.Optional(CONF_FORMAT, default="FLAC"): cv.enum(audio.AUDIO_FILE_TYPE_ENUM),
+        cv.Optional(CONF_ADVERTISE_FORMAT, default=True): cv.boolean,
+        cv.Optional(CONF_ADVERTISED_SAMPLE_RATE): cv.int_range(min=1),
+        cv.Optional(CONF_ADVERTISED_NUM_CHANNELS): cv.int_range(1, 2),
         cv.Optional(CONF_SAMPLE_RATE): cv.int_range(min=1),
         cv.Optional(CONF_NUM_CHANNELS): cv.int_range(1, 2),
     }
@@ -193,12 +200,24 @@ async def to_code(config: ConfigType) -> None:
                     await cg.get_variable(pipeline_config[CONF_SPEAKER]),
                 )
             )
-            if pipeline_config[CONF_FORMAT] != "NONE":
+            if (
+                pipeline_config[CONF_FORMAT] != "NONE"
+                and pipeline_config[CONF_ADVERTISE_FORMAT]
+            ):
+                advertised_format = dict(pipeline_config)
+                if CONF_ADVERTISED_SAMPLE_RATE in pipeline_config:
+                    advertised_format[CONF_SAMPLE_RATE] = pipeline_config[
+                        CONF_ADVERTISED_SAMPLE_RATE
+                    ]
+                if CONF_ADVERTISED_NUM_CHANNELS in pipeline_config:
+                    advertised_format[CONF_NUM_CHANNELS] = pipeline_config[
+                        CONF_ADVERTISED_NUM_CHANNELS
+                    ]
                 cg.add(
                     var.set_format(
                         pipeline_enum,
                         media_player.build_supported_format_struct(
-                            pipeline_config, purpose
+                            advertised_format, purpose
                         ),
                     )
                 )
