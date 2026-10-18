@@ -128,7 +128,7 @@ void A2DPSourceSpeaker::dump_config() {
 }
 
 void A2DPSourceSpeaker::set_volume(float volume) {
-  this->volume_ = std::clamp(volume, 0.0f, 0.05f);
+  this->volume_ = std::clamp(volume, 0.0f, 1.0f);
   this->gain_q15_.store(static_cast<uint16_t>(this->volume_ * 32768.0f));
 }
 
@@ -259,7 +259,9 @@ int32_t A2DPSourceSpeaker::audio_data_(uint8_t *data, int32_t length) {
   size_t bytes = speaker->requested_.load() && speaker->pcm_buffer_ ? speaker->pcm_buffer_->read(data, length) : 0;
   if (bytes < static_cast<size_t>(length)) {
     std::memset(data + bytes, 0, length - bytes);
-    if (speaker->received_first_data_.load()) {
+    // The ESP-IDF callback can continue while playback is finishing and after
+    // it has stopped. Those intentional silence frames are not underruns.
+    if (speaker->requested_.load() && !speaker->finish_pending_.load() && speaker->received_first_data_.load()) {
       speaker->underrun_bytes_.fetch_add(length - bytes);
       speaker->underrun_events_.fetch_add(1);
     }
