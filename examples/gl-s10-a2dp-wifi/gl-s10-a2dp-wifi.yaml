@@ -1,0 +1,421 @@
+# GL.iNet GL-S10: Wi-Fi, BLE proxy, and Bluetooth Classic A2DP audio.
+# Requires the ESPHome A2DP source changes linked in README.md.
+substitutions:
+  name: gl-s10-a2dp
+  friendly_name: GL-S10 Bluetooth Audio
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  devices:
+    - id: receiver_1_device
+      name: Receiver 1
+      relation: via
+    - id: receiver_2_device
+      name: Receiver 2
+      relation: via
+    - id: receiver_3_device
+      name: Receiver 3
+      relation: via
+  on_boot:
+    then:
+      - output.turn_on: power_led
+
+esp32:
+  board: esp32doit-devkit-v1
+  flash_frequency: 80MHz
+  framework:
+    type: esp-idf
+    advanced:
+      sram1_as_iram: true
+
+psram:
+  mode: quad
+  speed: 80MHz
+  ignore_not_found: true
+
+logger:
+  level: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  reboot_timeout: 0s
+  ap:
+    ssid: GL-S10 Audio Recovery
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  reboot_timeout: 0s
+  actions:
+    - action: a2dp_start_discovery
+      then:
+        - a2dp_source.start_discovery:
+            id: receiver_1
+    - action: a2dp_cancel_discovery
+      then:
+        - a2dp_source.cancel_discovery:
+            id: receiver_1
+    - action: a2dp_set_discovery_page
+      variables:
+        page: int
+      then:
+        - a2dp_source.set_discovery_page:
+            id: receiver_1
+            page: !lambda 'return page;'
+    - action: a2dp_set_bond_page
+      variables:
+        page: int
+      then:
+        - a2dp_source.set_bond_page:
+            id: receiver_1
+            page: !lambda 'return page;'
+    - action: a2dp_pair
+      variables:
+        slot: int
+        address: string
+        pin: string
+      then:
+        - lambda: |-
+            a2dp_source::A2DPSourceSpeaker *target = nullptr;
+            if (slot == 1) target = id(receiver_1);
+            if (slot == 2) target = id(receiver_2);
+            if (slot == 3) target = id(receiver_3);
+            if (target == nullptr || !target->pair(address.c_str(), pin.c_str()))
+              ESP_LOGW("a2dp_control", "Pair request rejected for slot %ld", (long) slot);
+    - action: a2dp_pair_incoming
+      variables:
+        slot: int
+        address: string
+      then:
+        - lambda: |-
+            a2dp_source::A2DPSourceSpeaker *target = nullptr;
+            if (slot == 1) target = id(receiver_1);
+            if (slot == 2) target = id(receiver_2);
+            if (slot == 3) target = id(receiver_3);
+            if (target == nullptr || !target->pair_incoming(address.c_str()))
+              ESP_LOGW("a2dp_control", "Incoming pairing rejected for slot %ld", (long) slot);
+    - action: a2dp_select
+      variables:
+        slot: int
+        address: string
+      then:
+        - lambda: |-
+            a2dp_source::A2DPSourceSpeaker *target = nullptr;
+            if (slot == 1) target = id(receiver_1);
+            if (slot == 2) target = id(receiver_2);
+            if (slot == 3) target = id(receiver_3);
+            if (target == nullptr || !target->select_bond(address.c_str()))
+              ESP_LOGW("a2dp_control", "Selection rejected for slot %ld", (long) slot);
+    - action: a2dp_clear_selection
+      variables:
+        slot: int
+      then:
+        - if:
+            condition:
+              lambda: 'return slot == 1;'
+            then:
+              - a2dp_source.clear_selection:
+                  id: receiver_1
+        - if:
+            condition:
+              lambda: 'return slot == 2;'
+            then:
+              - a2dp_source.clear_selection:
+                  id: receiver_2
+        - if:
+            condition:
+              lambda: 'return slot == 3;'
+            then:
+              - a2dp_source.clear_selection:
+                  id: receiver_3
+    - action: a2dp_unpair
+      variables:
+        slot: int
+      then:
+        - lambda: |-
+            a2dp_source::A2DPSourceSpeaker *target = nullptr;
+            if (slot == 1) target = id(receiver_1);
+            if (slot == 2) target = id(receiver_2);
+            if (slot == 3) target = id(receiver_3);
+            if (target == nullptr || !target->unpair())
+              ESP_LOGW("a2dp_control", "Unpair rejected for slot %ld", (long) slot);
+    - action: a2dp_confirm
+      variables:
+        slot: int
+        approve: bool
+      then:
+        - lambda: |-
+            a2dp_source::A2DPSourceSpeaker *target = nullptr;
+            if (slot == 1) target = id(receiver_1);
+            if (slot == 2) target = id(receiver_2);
+            if (slot == 3) target = id(receiver_3);
+            if (target == nullptr || !target->confirm_pairing(approve))
+              ESP_LOGW("a2dp_control", "Confirmation rejected for slot %ld", (long) slot);
+    - action: a2dp_forget_address
+      variables:
+        address: string
+      then:
+        - a2dp_source.forget:
+            id: receiver_1
+            address: !lambda 'return address;'
+
+ota:
+  - platform: esphome
+    encryption:
+
+safe_mode:
+  boot_is_good_after: 24h
+  boot_is_good_on_shutdown: false
+  reboot_timeout: 20min
+
+button:
+  - platform: safe_mode
+    name: Safe Mode Boot
+    entity_category: diagnostic
+  - platform: template
+    name: Scan Classic Receivers
+    entity_category: config
+    on_press:
+      - a2dp_source.start_discovery:
+          id: receiver_1
+  - platform: template
+    name: Cancel Classic Scan
+    entity_category: config
+    on_press:
+      - a2dp_source.cancel_discovery:
+          id: receiver_1
+
+esp32_ble:
+  classic_bt: true
+  classic_max_acl_connections: 2
+  use_psram: true
+
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 320ms
+    window: 80ms
+    active: true
+  on_ble_advertise:
+    then:
+      - lambda: 'id(ble_advertisements)++;'
+
+bluetooth_proxy:
+  active: true
+
+status_led:
+  pin:
+    number: GPIO32
+    inverted: true
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO33
+      inverted: true
+    name: Side Button
+  - platform: status
+    name: API Status
+    internal: true
+    on_press:
+      - output.turn_on: bluetooth_led
+    on_release:
+      - output.turn_off: bluetooth_led
+
+output:
+  - platform: gpio
+    pin: GPIO14
+    inverted: true
+    id: power_led
+  - platform: gpio
+    pin: GPIO12
+    inverted: true
+    id: bluetooth_led
+
+globals:
+  - id: ble_advertisements
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+speaker:
+  - platform: a2dp_source
+    id: receiver_1
+    slot: 1
+    num_channels: 2
+    sample_rate: 44100
+    on_preempt:
+      - media_player.stop: player_1
+  - platform: a2dp_source
+    id: receiver_2
+    slot: 2
+    num_channels: 2
+    sample_rate: 44100
+    on_preempt:
+      - media_player.stop: player_2
+  - platform: a2dp_source
+    id: receiver_3
+    slot: 3
+    num_channels: 2
+    sample_rate: 44100
+    on_preempt:
+      - media_player.stop: player_3
+  - platform: resampler
+    id: resampler_1
+    output_speaker: receiver_1
+    bits_per_sample: 16
+    filters: 8
+    taps: 16
+    buffer_duration: 80ms
+  - platform: resampler
+    id: resampler_2
+    output_speaker: receiver_2
+    bits_per_sample: 16
+    filters: 8
+    taps: 16
+    buffer_duration: 80ms
+  - platform: resampler
+    id: resampler_3
+    output_speaker: receiver_3
+    bits_per_sample: 16
+    filters: 8
+    taps: 16
+    buffer_duration: 80ms
+
+media_player:
+  - platform: speaker
+    id: player_1
+    name: Audio Player
+    device_id: receiver_1_device
+    buffer_size: 32768
+    task_stack_in_psram: false
+    volume_initial: 0.01
+    announcement_pipeline:
+      speaker: resampler_1
+      format: MP3
+      num_channels: 2
+      sample_rate: 44100
+    preconnect_speaker: receiver_1
+    preconnect_timeout: 60s
+  - platform: speaker
+    id: player_2
+    name: Audio Player
+    device_id: receiver_2_device
+    buffer_size: 32768
+    task_stack_in_psram: false
+    volume_initial: 0.01
+    announcement_pipeline:
+      speaker: resampler_2
+      format: MP3
+      num_channels: 2
+      sample_rate: 44100
+    preconnect_speaker: receiver_2
+    preconnect_timeout: 60s
+  - platform: speaker
+    id: player_3
+    name: Audio Player
+    device_id: receiver_3_device
+    buffer_size: 32768
+    task_stack_in_psram: false
+    volume_initial: 0.01
+    announcement_pipeline:
+      speaker: resampler_3
+      format: MP3
+      num_channels: 2
+      sample_rate: 44100
+    preconnect_speaker: receiver_3
+    preconnect_timeout: 60s
+
+text_sensor:
+  - platform: version
+    name: ESPHome Version
+  - platform: template
+    name: Classic Discovery Page
+    update_interval: 5s
+    lambda: 'return id(receiver_1).discovery_results(id(receiver_1).discovery_page());'
+  - platform: template
+    name: Classic Bond Page
+    update_interval: 5s
+    lambda: 'return id(receiver_1).bond_list(id(receiver_1).bond_page());'
+  - platform: template
+    name: Classic Forget Status
+    update_interval: 5s
+    lambda: 'return {id(receiver_1).forget_status()};'
+  - platform: template
+    name: Pairing Confirmation
+    update_interval: 2s
+    lambda: |-
+      if (id(receiver_1).confirmation_prompt() != "none") return id(receiver_1).confirmation_prompt();
+      if (id(receiver_2).confirmation_prompt() != "none") return id(receiver_2).confirmation_prompt();
+      return id(receiver_3).confirmation_prompt();
+  - platform: template
+    name: Receiver 1 Address
+    update_interval: 5s
+    lambda: 'return id(receiver_1).address_string();'
+  - platform: template
+    name: Receiver 2 Address
+    update_interval: 5s
+    lambda: 'return id(receiver_2).address_string();'
+  - platform: template
+    name: Receiver 3 Address
+    update_interval: 5s
+    lambda: 'return id(receiver_3).address_string();'
+  - platform: template
+    name: Receiver 1 Pairing Status
+    update_interval: 5s
+    lambda: 'return {id(receiver_1).pairing_status()};'
+  - platform: template
+    name: Receiver 2 Pairing Status
+    update_interval: 5s
+    lambda: 'return {id(receiver_2).pairing_status()};'
+  - platform: template
+    name: Receiver 3 Pairing Status
+    update_interval: 5s
+    lambda: 'return {id(receiver_3).pairing_status()};'
+
+sensor:
+  - platform: wifi_signal
+    name: Wi-Fi Signal
+    update_interval: 60s
+  - platform: uptime
+    name: Uptime
+    update_interval: 60s
+  - platform: template
+    name: BLE Advertisements Received
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: 'return id(ble_advertisements);'
+  - platform: template
+    name: Classic Bond Count
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: 'return id(receiver_1).bond_count();'
+  - platform: template
+    name: Classic Discovery Count
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: 'return id(receiver_1).discovery_count();'
+  - platform: template
+    name: Audio PCM Bytes
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: 'return id(receiver_1).pcm_bytes() + id(receiver_2).pcm_bytes() + id(receiver_3).pcm_bytes();'
+  - platform: template
+    name: Audio Underrun Events
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: 'return id(receiver_1).underrun_events() + id(receiver_2).underrun_events() + id(receiver_3).underrun_events();'
+  - platform: template
+    name: Internal Free Heap
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: 'return heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);'
+  - platform: template
+    name: Free PSRAM
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: 'return heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);'
