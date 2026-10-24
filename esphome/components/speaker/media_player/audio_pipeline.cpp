@@ -269,7 +269,12 @@ esp_err_t AudioPipeline::allocate_communications_() {
 }
 
 esp_err_t AudioPipeline::start_tasks_() {
-  const BaseType_t task_core_id = xPortGetCoreID();
+#if CONFIG_FREERTOS_UNICORE
+  const BaseType_t task_core_id = tskNO_AFFINITY;
+#else
+  // Keep the CPU-heavy audio pipeline off the core running the main loop.
+  const BaseType_t task_core_id = xPortGetCoreID() == 0 ? 1 : 0;
+#endif
 
   if (!this->read_task_.is_created()) {
     // Reader task uses the AudioReader class which uses esp_http_client. This crashes on IDF 5.4 if the task stack is
